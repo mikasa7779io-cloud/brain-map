@@ -83,6 +83,7 @@ const seed = {
 let state = hydratePlannedEdges(loadState());
 let graph = { nodes: [], edges: [] };
 let selectedNodeId = null;
+let activePathActionNodeId = null;
 let pathStartId = null;
 let focusMode = false;
 let recording = [];
@@ -115,6 +116,10 @@ let pendingDeletePathOption = null;
 let selectedOldStepOption = null;
 
 saveState();
+
+function clearActivePathAction() {
+  activePathActionNodeId = null;
+}
 
 const els = {
   range: document.getElementById("rangeSelect"),
@@ -160,7 +165,6 @@ const els = {
   pathFinish: document.getElementById("pathFinish"),
   pathView: document.getElementById("pathView"),
   pathMap: document.getElementById("pathMap"),
-  pathEdgeKindButton: document.getElementById("pathEdgeKindButton"),
   pathContextMenu: document.getElementById("pathContextMenu"),
   pathContextDelete: document.getElementById("pathContextDelete"),
   pathShell: document.querySelector(".path-shell"),
@@ -218,7 +222,6 @@ els.pathRecordButton.addEventListener("click", () => {
 });
 els.pathAddOld.addEventListener("click", () => openNewNodeDialog("path-old"));
 els.pathAddNext.addEventListener("click", () => openNewNodeDialog("path-new"));
-els.pathEdgeKindButton.addEventListener("click", toggleCurrentEdgeKind);
 els.pathPause.addEventListener("click", addPausePoint);
 els.skipPause.addEventListener("click", finishPauseCard);
 els.pathUndo.addEventListener("click", undoStep);
@@ -598,6 +601,7 @@ async function resetToNewUser() {
   recordingFromPath = false;
   activeGuidedEpisodeId = null;
   selectedNodeId = null;
+  clearActivePathAction();
   pathStartId = null;
   savedPositions = {};
   pathTextScale = 1.06;
@@ -686,7 +690,6 @@ function handleViewportResize() {
   applyPathTextScale();
   renderPathView();
   positionPathDraftBar();
-  positionEdgeKindButton();
 }
 
 function backupPayload(reason = "manual") {
@@ -1061,6 +1064,7 @@ function hideStartOption(nodeId) {
   if (pathStartId === nodeId) {
     pathStartId = null;
     selectedNodeId = null;
+    clearActivePathAction();
     expandedPathNodeIds = new Set();
     els.pathInsight.innerHTML = "";
     els.pathInsight.classList.add("hidden");
@@ -1086,6 +1090,7 @@ function choosePathStart(id) {
   scheduleCloudSync();
   pathStartId = id;
   selectedNodeId = id;
+  clearActivePathAction();
   expandedPathNodeIds = new Set();
   closeStartPicker();
   render();
@@ -1236,6 +1241,11 @@ function renderPathView() {
   const choicePoints = deriveChoicePoints();
   const svg = els.pathMap;
   svg.innerHTML = "";
+  svg.onclick = (event) => {
+    if (event.target !== svg) return;
+    activePathActionNodeId = null;
+    renderPathView();
+  };
   svg.setAttribute("viewBox", `0 0 ${viewWidth} ${minViewHeight}`);
   const nodes = [];
   const edges = [];
@@ -1374,6 +1384,7 @@ function renderPathView() {
       openEditNodeDialog(branch.nodeId);
     });
     group.dataset.nodeId = branch.nodeId;
+    if (branch.parentNodeId) group.dataset.parentNodeId = branch.parentNodeId;
 
     const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
     rect.setAttribute("x", branch.x - width / 2);
@@ -1392,17 +1403,20 @@ function renderPathView() {
     hit.setAttribute("fill", "transparent");
     group.appendChild(hit);
 
-    const showStartAction = !recordingFromPath && branch.nodeId === selectedNodeId;
+    const showNodeActions = activePathActionNodeId === branch.nodeId;
     const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
     text.setAttribute("x", branch.x);
     text.setAttribute("y", branch.y);
     text.textContent = branch.hasHiddenChildren ? `${label} ›` : label;
     group.appendChild(text);
 
-    if (showStartAction) {
+    if (showNodeActions) {
       renderStartHereButton(group, branch, width, heightBox);
     }
-    if (shouldShowPathNodeDelete(branch)) {
+    if (showNodeActions && shouldShowPathNodeDelete(branch)) {
+      renderEdgeKindToggle(group, branch, width, heightBox);
+    }
+    if (showNodeActions && shouldShowPathNodeDelete(branch)) {
       renderNodeMenuButton(group, branch, width, heightBox);
     }
     svg.appendChild(group);
@@ -1517,6 +1531,60 @@ function renderNodeMenuButton(group, branch, width, heightBox) {
   dots.setAttribute("y", y - 1.5);
   dots.textContent = "⋯";
   action.appendChild(dots);
+  group.appendChild(action);
+}
+
+function renderEdgeKindToggle(group, branch, width, heightBox) {
+  const x = branch.x + width / 2 + 10;
+  const y = branch.y - heightBox / 2 - 5;
+  const edgeKey = pathOptionKey(branch.parentNodeId, branch.nodeId);
+  const isNew = isEdgeMarkedNew(edgeKey);
+  const action = document.createElementNS("http://www.w3.org/2000/svg", "g");
+  action.setAttribute("class", `path-node-kind ${isNew ? "is-new" : ""}`);
+  action.setAttribute("tabindex", "0");
+  action.setAttribute("role", "button");
+  action.setAttribute("aria-label", isNew ? "改回旧路" : "标为新路");
+  action.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleEdgeKind(edgeKey);
+  });
+  action.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleEdgeKind(edgeKey);
+  });
+
+  const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+  title.textContent = isNew ? "改回旧路" : "标为新路";
+  action.appendChild(title);
+
+  const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  circle.setAttribute("cx", x);
+  circle.setAttribute("cy", y);
+  circle.setAttribute("r", 9);
+  action.appendChild(circle);
+
+  const topArc = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  topArc.setAttribute("class", "toggle-arc");
+  topArc.setAttribute("d", `M ${x - 5.6} ${y - 1.2} A 6 6 0 0 1 ${x + 3.8} ${y - 5.1}`);
+  action.appendChild(topArc);
+
+  const topArrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  topArrow.setAttribute("class", "toggle-arrow");
+  topArrow.setAttribute("d", `M ${x + 3.8} ${y - 5.1} L ${x + 3.1} ${y - 1.8} L ${x + 6.3} ${y - 3.0} Z`);
+  action.appendChild(topArrow);
+
+  const bottomArc = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  bottomArc.setAttribute("class", "toggle-arc");
+  bottomArc.setAttribute("d", `M ${x + 5.6} ${y + 1.2} A 6 6 0 0 1 ${x - 3.8} ${y + 5.1}`);
+  action.appendChild(bottomArc);
+
+  const bottomArrow = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  bottomArrow.setAttribute("class", "toggle-arrow");
+  bottomArrow.setAttribute("d", `M ${x - 3.8} ${y + 5.1} L ${x - 3.1} ${y + 1.8} L ${x - 6.3} ${y + 3.0} Z`);
+  action.appendChild(bottomArrow);
   group.appendChild(action);
 }
 
@@ -2158,6 +2226,7 @@ function isAvailableNext(nodeId) {
 
 function handlePathNodeClick(nodeId) {
   selectedNodeId = nodeId;
+  activePathActionNodeId = nodeId;
   if (!recordingFromPath) {
     if (expandedPathNodeIds.has(nodeId)) {
       expandedPathNodeIds.delete(nodeId);
@@ -2175,6 +2244,7 @@ function handlePathNodeClick(nodeId) {
     }
     recording = recording.slice(0, existingIndex + 1);
     pathStartId = recording[0];
+    activePathActionNodeId = recording[recording.length - 1];
     render();
     return;
   }
@@ -2184,6 +2254,7 @@ function handlePathNodeClick(nodeId) {
     || temporaryNodeIds.has(nodeId);
   if (canMove) {
     recording.push(nodeId);
+    activePathActionNodeId = nodeId;
     render();
     return;
   }
@@ -2191,6 +2262,7 @@ function handlePathNodeClick(nodeId) {
   if (parentIndex >= 0) {
     recording = recording.slice(0, parentIndex + 1);
     recording.push(nodeId);
+    activePathActionNodeId = nodeId;
     render();
   }
 }
@@ -2203,6 +2275,7 @@ function startPathRecording(startId) {
   freshRecordingNodeIds = new Set();
   freshRecordingEdgeKeys = new Set();
   selectedNodeId = startId;
+  activePathActionNodeId = startId;
   pathStartId = startId;
   els.recordPanel.dataset.surface = "";
   els.recordPanel.classList.add("hidden");
@@ -2218,6 +2291,7 @@ function continuePathRecording(pathIds) {
   freshRecordingNodeIds = new Set();
   freshRecordingEdgeKeys = new Set();
   selectedNodeId = ids[ids.length - 1];
+  activePathActionNodeId = selectedNodeId;
   pathStartId = ids[0];
   els.recordPanel.dataset.surface = "";
   els.recordPanel.classList.add("hidden");
@@ -2228,7 +2302,6 @@ function renderPathDraftBar() {
   const active = recordingFromPath && recording.length;
   if (!active) clearPathDraftBarAutoHide();
   els.pathDraftBar.classList.toggle("hidden", !active);
-  positionEdgeKindButton();
   if (!active) return;
   els.pathDraftBar.classList.remove("is-fading");
   els.pathDraftLine.textContent = draftPathLabel();
@@ -2243,14 +2316,26 @@ function currentRecordingEdgeKey() {
   return pathOptionKey(recording[recording.length - 2], recording[recording.length - 1]);
 }
 
+function selectedObservationEdgeKey() {
+  if (recordingFromPath || !selectedNodeId) return null;
+  const nodeEl = Array.from(els.pathMap.querySelectorAll(".path-node")).find((item) => item.dataset.nodeId === selectedNodeId);
+  const parentNodeId = nodeEl?.dataset.parentNodeId;
+  if (!parentNodeId) return null;
+  return pathOptionKey(parentNodeId, selectedNodeId);
+}
+
+function activeEdgeKindKey() {
+  return currentRecordingEdgeKey() || selectedObservationEdgeKey();
+}
+
 function isCurrentRecordingEdgeNew() {
-  const key = currentRecordingEdgeKey();
+  const key = activeEdgeKindKey();
   if (!key) return false;
   return isEdgeMarkedNew(key);
 }
 
 function toggleCurrentEdgeKind() {
-  const key = currentRecordingEdgeKey();
+  const key = activeEdgeKindKey();
   if (!key) return;
   toggleEdgeKind(key);
 }
@@ -2272,7 +2357,6 @@ function toggleEdgeKind(key) {
   state.newPathEdgeKeys = [...keys];
   saveState();
   render();
-  requestAnimationFrame(positionEdgeKindButton);
 }
 
 function schedulePathDraftBarAutoHide() {
@@ -2312,26 +2396,6 @@ function positionPathDraftBar() {
   top = clamp(top, 92, Math.max(92, viewRect.height - barRect.height - 12));
   els.pathDraftBar.style.setProperty("--draft-bar-left", `${Math.round(left)}px`);
   els.pathDraftBar.style.setProperty("--draft-bar-top", `${Math.round(top)}px`);
-  positionEdgeKindButton();
-}
-
-function positionEdgeKindButton() {
-  const key = currentRecordingEdgeKey();
-  const currentId = recording[recording.length - 1];
-  const nodeEl = currentId ? Array.from(els.pathMap.querySelectorAll(".path-node")).find((item) => item.dataset.nodeId === currentId) : null;
-  if (!key || !nodeEl || !recordingFromPath) {
-    els.pathEdgeKindButton.classList.add("hidden");
-    return;
-  }
-  const nodeRect = nodeEl.getBoundingClientRect();
-  const viewRect = els.pathView.getBoundingClientRect();
-  const isNew = isEdgeMarkedNew(key);
-  els.pathEdgeKindButton.classList.toggle("is-new", isNew);
-  els.pathEdgeKindButton.setAttribute("aria-label", isNew ? "改回旧路" : "标为新路");
-  els.pathEdgeKindButton.title = isNew ? "改回旧路" : "标为新路";
-  els.pathEdgeKindButton.style.left = `${Math.round(nodeRect.right - viewRect.left + 1)}px`;
-  els.pathEdgeKindButton.style.top = `${Math.round(nodeRect.top - viewRect.top - 15)}px`;
-  els.pathEdgeKindButton.classList.remove("hidden");
 }
 
 function showOldStepChoices() {
@@ -3096,6 +3160,7 @@ function stopRecording(options = { discardTemporary: true }) {
   recording = [];
   recordingFromPath = false;
   recordingPauses = [];
+  clearActivePathAction();
   recordingSource = null;
   recordingBodyPromptDone = false;
   recordingBodySkipped = false;
@@ -3142,6 +3207,7 @@ function finishRecord() {
   convertPlannedEdgesForEpisode(finishedEpisode);
   saveState();
   selectedNodeId = recording[0];
+  clearActivePathAction();
   pathStartId = recording[0];
   stopRecording({ discardTemporary: false });
   render();
