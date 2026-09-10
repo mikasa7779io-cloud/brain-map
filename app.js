@@ -78,7 +78,6 @@ const seed = {
 };
 
 let state = hydratePlannedEdges(loadState());
-saveState();
 let graph = { nodes: [], edges: [] };
 let selectedNodeId = null;
 let pathStartId = null;
@@ -110,6 +109,8 @@ let expandedChangeInsightIds = new Set();
 let pathTextScale = Number(localStorage.getItem(PATH_TEXT_SCALE_KEY) || "1.06");
 let pendingDeletePathOption = null;
 let selectedOldStepOption = null;
+
+saveState();
 
 const els = {
   range: document.getElementById("rangeSelect"),
@@ -359,6 +360,11 @@ function purgeExpiredDeletedItems(sourceState = state) {
 }
 
 function purgeExpiredHiddenStartMeta() {
+  try {
+    if (!hiddenStartDeletedAt || !hiddenStartNodeIds) return false;
+  } catch {
+    return false;
+  }
   let changed = false;
   Object.keys(hiddenStartDeletedAt).forEach((id) => {
     if (!hiddenStartNodeIds.has(id) || isTrashExpired(hiddenStartDeletedAt[id])) {
