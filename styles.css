@@ -1768,8 +1768,9 @@ menu {
   }
 
   .start-picker {
-    max-width: 100%;
-    flex-basis: auto;
+    width: min(430px, 100%);
+    max-width: 430px;
+    flex-basis: 430px;
     gap: 4px;
     font-size: 13px;
   }
@@ -1805,14 +1806,16 @@ menu {
   }
 
   .path-shell {
-    height: 54vh;
-    min-height: 360px;
-    border-radius: 18px;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.055);
+    height: 48vh;
+    min-height: 320px;
+    border-color: transparent;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
   }
 
   #pathMap {
-    width: max(100%, 760px);
+    width: max(100%, 720px);
     min-height: 100%;
   }
 
