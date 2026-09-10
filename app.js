@@ -865,30 +865,30 @@ function orderedIds(ep) {
   return [...ep.steps].sort((a, b) => a.order - b.order).map((s) => s.nodeId);
 }
 
+function orderedPathIds(ep) {
+  return orderedIds(ep).filter((id) => !isBodyClusterNodeId(id));
+}
+
+function isBodyClusterNodeId(nodeId) {
+  return getNode(nodeId)?.label === BODY_CLUSTER_LABEL;
+}
+
 function orderedLabelsWithPauses(ep) {
-  const ids = orderedIds(ep);
+  const ids = orderedPathIds(ep);
   const pauseIndexes = new Set((ep.pauseMarkers || []).map((marker) => marker.afterStepIndex));
   const parts = [];
   ids.forEach((id, index) => {
-    parts.push(labelForBodyClusterStep(id, ep.bodyReactions));
+    parts.push(getNode(id)?.label || "未知");
     if (pauseIndexes.has(index)) parts.push("⏸");
   });
   return parts.join(" -> ");
-}
-
-function labelForBodyClusterStep(nodeId, bodyReactions = []) {
-  const label = getNode(nodeId)?.label || "未知";
-  if (label === BODY_CLUSTER_LABEL && bodyReactions?.length) {
-    return `${BODY_CLUSTER_LABEL}（${bodyReactions.join(" / ")}）`;
-  }
-  return label;
 }
 
 function buildGraph(sourceState, episodes = filteredEpisodes()) {
   const nodes = new Map(sourceState.nodes.map((n) => [n.id, { ...n, count: 0 }]));
   const edges = new Map();
   episodes.forEach((ep) => {
-    const ids = orderedIds(ep);
+    const ids = orderedPathIds(ep);
     ids.forEach((id) => {
       const n = nodes.get(id);
       if (n) {
@@ -1099,7 +1099,7 @@ function recentStartOptions() {
   filteredEpisodes()
     .sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt))
     .forEach((ep) => {
-      const first = orderedIds(ep)[0];
+      const first = orderedPathIds(ep)[0];
       if (!first || seen.has(first)) return;
       seen.add(first);
       const count = startOptions().find((item) => item.id === first)?.count || 1;
@@ -1111,7 +1111,7 @@ function recentStartOptions() {
 function buildPathTree(startId, maxDepth = 5) {
   const root = { id: startId, nodeId: startId, count: 0, depth: 0, children: new Map(), episodes: [] };
   filteredEpisodes().forEach((ep) => {
-    const ids = orderedIds(ep);
+    const ids = orderedPathIds(ep);
     const startIndex = ids.indexOf(startId);
     if (startIndex < 0) return;
     const slice = ids.slice(startIndex, startIndex + maxDepth + 1);
@@ -1569,7 +1569,7 @@ function deletePathOption(fromNodeId, toNodeId) {
 function deriveChoicePoints() {
   const points = new Map();
   filteredEpisodes().forEach((ep) => {
-    const ids = orderedIds(ep);
+    const ids = orderedPathIds(ep);
     (ep.pauseMarkers || []).forEach((marker) => {
       const fromNodeId = ids[marker.afterStepIndex];
       const toNodeId = ids[marker.afterStepIndex + 1] || null;
@@ -1809,10 +1809,16 @@ function renderInsightEvidence(episodeIds) {
     <div class="ai-evidence">
       <div class="ai-evidence-title">证据</div>
       ${episodes.map((ep) => `
-        <div class="ai-evidence-row">${formatTime(ep.startedAt)}　${escapeHtml(orderedLabelsWithPauses(ep))}</div>
+        <div class="ai-evidence-row">${formatTime(ep.startedAt)}　${escapeHtml(evidenceLineForEpisode(ep))}</div>
       `).join("")}
     </div>
   `;
+}
+
+function evidenceLineForEpisode(ep) {
+  const path = orderedLabelsWithPauses(ep) || "未记录路径";
+  const body = bodyReactionSummary(ep);
+  return body ? `${path}｜${body}` : path;
 }
 
 function buildInsightPayload(range = "today") {
@@ -1924,7 +1930,7 @@ function edgeFactsForEpisodes(episodes, previousEpisodes) {
   const previous = edgeCountsFor(previousEpisodes);
   const episodeIdsByEdge = new Map();
   episodes.forEach((ep) => {
-    const ids = orderedIds(ep);
+    const ids = orderedPathIds(ep);
     for (let i = 0; i < ids.length - 1; i += 1) {
       const key = `${ids[i]}->${ids[i + 1]}`;
       const idsForEdge = episodeIdsByEdge.get(key) || new Set();
@@ -2293,12 +2299,12 @@ function confirmOldStepChoice() {
 function draftPathLabel() {
   if (!recordingBodyPromptDone && recordingBodyReactions.length) {
     const trigger = getNode(recording[0])?.label || "未知";
-    return `${trigger} -> ${BODY_CLUSTER_LABEL}（${recordingBodyReactions.join(" / ")}）`;
+    return `${trigger} · 身体：${recordingBodyReactions.join(" / ")}`;
   }
   const pauseIndexes = new Set(recordingPauses.map((marker) => marker.afterStepIndex));
   const parts = [];
   recording.forEach((id, index) => {
-    parts.push(labelForBodyClusterStep(id, recordingBodyReactions));
+    parts.push(getNode(id)?.label || "未知");
     if (pauseIndexes.has(index)) parts.push("⏸");
   });
   return parts.join(" -> ");
@@ -2872,6 +2878,7 @@ function renderHistory() {
 
 function historyEpisodeRow(ep, selectedSet, selectName, action) {
   const labels = orderedLabelsWithPauses(ep);
+  const bodySummary = bodyReactionSummary(ep);
   const checked = selectedSet.has(ep.id) ? "checked" : "";
   const actionButton = action === "restore"
     ? `<button class="secondary" data-restore="${ep.id}">恢复</button>`
@@ -2887,10 +2894,16 @@ function historyEpisodeRow(ep, selectedSet, selectName, action) {
       <div>
         <div class="episode-time">${formatTime(ep.startedAt)}</div>
         <div>${ep.aware ? "◉ " : ""}${escapeHtml(labels)}</div>
+        ${bodySummary ? `<div class="episode-body-evidence">${escapeHtml(bodySummary)}</div>` : ""}
       </div>
       ${actionButton}
     </article>
   `;
+}
+
+function bodyReactionSummary(ep) {
+  const reactions = (ep.bodyReactions || []).filter(Boolean);
+  return reactions.length ? `身体：${reactions.join(" / ")}` : "";
 }
 
 function deleteEpisodes(ids) {
@@ -3130,8 +3143,7 @@ function goBackRecordStep() {
     recordingBodyPromptDone = false;
     recordingBodySkipped = false;
   } else if (stage === "path") {
-    if ((recordingBodySkipped || recordingHasOnlyBodyCluster()) && recording.length <= 2) {
-      removeBodyClusterFromRecording();
+    if ((recordingBodySkipped || recordingBodyReactions.length) && recording.length <= 1) {
       recordingBodyPromptDone = false;
       recordingBodySkipped = false;
     } else if (recording.length) {
@@ -3237,7 +3249,6 @@ function renderRecorder() {
       next.className = "choice-card body-continue-card";
       next.innerHTML = `<strong>继续记录后面</strong><span>已选 ${selectedBodyCount} 个身体反应</span>`;
       next.addEventListener("click", () => {
-        ensureBodyClusterInRecording();
         recordingBodyPromptDone = true;
         recordingBodySkipped = false;
         syncGuidedAutosave();
@@ -3313,37 +3324,6 @@ function toggleBodyRecorderOption(option) {
   recordingBodySkipped = false;
 }
 
-function ensureBodyClusterInRecording() {
-  if (!recording.length || !recordingBodyReactions.length) return null;
-  const bodyNode = ensureNodeByLabel(BODY_CLUSTER_LABEL);
-  if (recording[1] !== bodyNode.id) {
-    recording = [recording[0], bodyNode.id, ...recording.slice(1).filter((id) => id !== bodyNode.id)];
-  }
-  return bodyNode.id;
-}
-
-function removeBodyClusterFromRecording() {
-  const bodyNode = state.nodes.find((n) => n.normalizedLabel === normalize(BODY_CLUSTER_LABEL));
-  if (!bodyNode) return;
-  recording = recording.filter((id) => id !== bodyNode.id);
-}
-
-function recordingHasOnlyBodyCluster() {
-  const bodyNode = state.nodes.find((n) => n.normalizedLabel === normalize(BODY_CLUSTER_LABEL));
-  return Boolean(bodyNode && recording.length === 2 && recording[1] === bodyNode.id);
-}
-
-function ensureNodeByLabel(label) {
-  const normalized = normalize(label);
-  let existing = state.nodes.find((n) => n.normalizedLabel === normalized);
-  if (!existing) {
-    existing = node(uid(), label);
-    state.nodes.push(existing);
-    saveState();
-  }
-  return existing;
-}
-
 function pathIdsForSelectedNode(nodeId) {
   if (!pathStartId || pathStartId === nodeId) return [nodeId];
   const root = buildPathTree(pathStartId);
@@ -3407,7 +3387,7 @@ function newNodeButtonLabel(stage, context = stage) {
 function startOptions() {
   const counts = new Map();
   filteredEpisodes().forEach((ep) => {
-    const first = orderedIds(ep)[0];
+    const first = orderedPathIds(ep)[0];
     if (first) counts.set(first, (counts.get(first) || 0) + 1);
   });
   return Array.from(counts.entries())

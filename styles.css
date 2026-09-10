@@ -1300,6 +1300,13 @@ h2 {
   align-items: center;
 }
 
+.episode-body-evidence {
+  margin-top: 4px;
+  color: #6f7785;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .deleted-episode {
   background: #fbfbfa;
   opacity: 0.76;
