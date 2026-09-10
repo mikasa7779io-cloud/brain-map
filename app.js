@@ -2,6 +2,8 @@ const STORAGE_KEY = "brain-map-v1";
 const POSITION_KEY = `${STORAGE_KEY}-cy-positions`;
 const PATH_TEXT_SCALE_KEY = `${STORAGE_KEY}-path-text-scale`;
 const BACKUP_SNAPSHOT_KEY = `${STORAGE_KEY}-backup-snapshots`;
+const HIDDEN_START_META_KEY = `${STORAGE_KEY}-hidden-starts-meta`;
+const TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const SUPABASE_URL = "https://pjyqpbsyryrjrjhzptya.supabase.co";
 const SUPABASE_KEY = "sb_publishable_GnE9iXy2uw8oBStdXzp5IA_VPBo03DK";
 const CLOUD_TABLE = "brain_map_state";
@@ -67,48 +69,19 @@ function daysAgo(days, hour, minute) {
 }
 
 const seed = {
-  nodes: [
-    node("anxiety", "焦虑"),
-    node("food", "吃东西"),
-    node("maocai", "冒菜"),
-    node("carb", "晕碳"),
-    node("cant-work", "工作做不了"),
-    node("sleep", "睡觉"),
-    node("phone", "刷手机"),
-    node("more-anxiety", "更焦虑"),
-    node("cat", "撸猫"),
-    node("light-food", "轻食"),
-    node("work", "继续工作"),
-    node("mentor", "看到导师消息"),
-    node("nervous", "紧张"),
-    node("avoid-open", "不敢打开"),
-    node("tired", "累"),
-    node("lie-down", "躺下")
-  ],
-  episodes: [
-    episode(["anxiety", "food", "maocai", "carb", "cant-work", "sleep", "more-anxiety"], daysAgo(1, 21, 13)),
-    episode(["anxiety", "food", "maocai", "carb", "sleep"], daysAgo(2, 13, 2)),
-    episode(["anxiety", "food", "light-food", "work"], daysAgo(2, 18, 42)),
-    episode(["anxiety", "phone", "more-anxiety"], daysAgo(3, 22, 15)),
-    episode(["anxiety", "phone", "more-anxiety"], daysAgo(4, 17, 40)),
-    episode(["anxiety", "cat", "work"], daysAgo(5, 19, 12)),
-    episode(["mentor", "nervous", "avoid-open", "phone", "more-anxiety"], daysAgo(6, 10, 30)),
-    episode(["tired", "lie-down", "phone", "sleep"], daysAgo(6, 15, 25)),
-    episode(["anxiety", "food", "maocai", "carb", "sleep"], daysAgo(8, 20, 1)),
-    episode(["anxiety", "food", "light-food", "work"], daysAgo(10, 12, 2)),
-    episode(["anxiety", "cat", "work"], daysAgo(12, 16, 33))
-  ],
-  plannedEdges: [
-    plannedEdge("food", "light-food", daysAgo(13, 9, 0))
-  ],
+  nodes: [],
+  episodes: [],
+  plannedEdges: [],
+  hiddenPathOptions: [],
+  hiddenPathDeletedAt: {},
   newPathEdgeKeys: []
 };
 
 let state = hydratePlannedEdges(loadState());
 saveState();
 let graph = { nodes: [], edges: [] };
-let selectedNodeId = "anxiety";
-let pathStartId = "anxiety";
+let selectedNodeId = null;
+let pathStartId = null;
 let focusMode = false;
 let recording = [];
 let recordingFromPath = false;
@@ -129,6 +102,7 @@ let pauseRemaining = 10;
 let draftBarHideTimer = null;
 let activeGuidedEpisodeId = null;
 let hiddenStartNodeIds = new Set(JSON.parse(localStorage.getItem(`${STORAGE_KEY}-hidden-starts`) || "[]"));
+let hiddenStartDeletedAt = loadHiddenStartDeletedAt();
 let selectedHistoryEpisodeIds = new Set();
 let selectedDeletedEpisodeIds = new Set();
 let changeRange = "today";
@@ -150,6 +124,7 @@ const els = {
   cloudUseRemote: document.getElementById("cloudUseRemote"),
   cloudRefresh: document.getElementById("cloudRefresh"),
   cloudLogout: document.getElementById("cloudLogout"),
+  resetNewUser: document.getElementById("resetNewUser"),
   recordButton: document.getElementById("recordButton"),
   recordPanel: document.getElementById("recordPanel"),
   recordTitle: document.getElementById("recordTitle"),
@@ -218,6 +193,7 @@ els.cloudLogout.addEventListener("click", logoutCloudSync);
 els.cloudUploadLocal.addEventListener("click", () => pushCloudState({ force: true }));
 els.cloudUseRemote.addEventListener("click", pullCloudState);
 els.cloudRefresh.addEventListener("click", refreshCloudState);
+els.resetNewUser.addEventListener("click", resetToNewUser);
 els.changeRangeButtons.forEach((button) => {
   button.addEventListener("click", () => {
     changeRange = button.dataset.changeRange || "today";
@@ -316,17 +292,82 @@ function loadState() {
       parsed.newPathEdgeKeys = [];
       migrated = true;
     }
+    if (!parsed.hiddenPathDeletedAt) {
+      parsed.hiddenPathDeletedAt = {};
+      migrated = true;
+    }
+    (parsed.hiddenPathOptions || []).forEach((key) => {
+      if (!parsed.hiddenPathDeletedAt[key]) {
+        parsed.hiddenPathDeletedAt[key] = new Date().toISOString();
+        migrated = true;
+      }
+    });
     parsed.plannedEdges = parsed.plannedEdges.map((edge) => {
       if (edge.firstWalkedEpisodeId !== undefined && edge.firstWalkedAt !== undefined) return edge;
       migrated = true;
       return { firstWalkedEpisodeId: null, firstWalkedAt: null, ...edge };
     });
     if (removeVerificationTestData(parsed)) migrated = true;
+    if (purgeExpiredDeletedItems(parsed)) migrated = true;
     if (migrated) localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
     return parsed;
   } catch {
     return clone(seed);
   }
+}
+
+function loadHiddenStartDeletedAt() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HIDDEN_START_META_KEY) || "{}");
+    const now = new Date().toISOString();
+    let changed = false;
+    hiddenStartNodeIds.forEach((id) => {
+      if (!parsed[id]) {
+        parsed[id] = now;
+        changed = true;
+      }
+    });
+    if (changed) localStorage.setItem(HIDDEN_START_META_KEY, JSON.stringify(parsed));
+    return parsed;
+  } catch {
+    return {};
+  }
+}
+
+function saveHiddenStartMeta() {
+  localStorage.setItem(HIDDEN_START_META_KEY, JSON.stringify(hiddenStartDeletedAt));
+}
+
+function isTrashExpired(iso) {
+  if (!iso) return false;
+  return Date.now() - new Date(iso).getTime() > TRASH_RETENTION_MS;
+}
+
+function purgeExpiredDeletedItems(sourceState = state) {
+  let changed = false;
+  const beforeEpisodes = sourceState.episodes.length;
+  sourceState.episodes = sourceState.episodes.filter((ep) => !(ep.status === "deleted" && isTrashExpired(ep.deletedAt)));
+  if (sourceState.episodes.length !== beforeEpisodes) changed = true;
+  sourceState.hiddenPathDeletedAt = sourceState.hiddenPathDeletedAt || {};
+  Object.keys(sourceState.hiddenPathDeletedAt).forEach((key) => {
+    if (!sourceState.hiddenPathOptions?.includes(key) || isTrashExpired(sourceState.hiddenPathDeletedAt[key])) {
+      delete sourceState.hiddenPathDeletedAt[key];
+      changed = true;
+    }
+  });
+  return changed;
+}
+
+function purgeExpiredHiddenStartMeta() {
+  let changed = false;
+  Object.keys(hiddenStartDeletedAt).forEach((id) => {
+    if (!hiddenStartNodeIds.has(id) || isTrashExpired(hiddenStartDeletedAt[id])) {
+      delete hiddenStartDeletedAt[id];
+      changed = true;
+    }
+  });
+  if (changed) saveHiddenStartMeta();
+  return changed;
 }
 
 function removeVerificationTestData(parsed) {
@@ -342,6 +383,8 @@ function removeVerificationTestData(parsed) {
 }
 
 function saveState() {
+  purgeExpiredDeletedItems(state);
+  purgeExpiredHiddenStartMeta();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   scheduleCloudSync();
 }
@@ -519,6 +562,42 @@ async function pullCloudState() {
   setCloudStatus(`已使用云端数据。本机旧状态已存入“恢复删除前”。`);
 }
 
+async function resetToNewUser() {
+  const confirmed = window.confirm("确定清空所有 Brain Map 数据，从刚注册成功的空白用户重新开始吗？当前数据会先存入本机快照。");
+  if (!confirmed) return;
+  saveBackupSnapshot("before-reset-new-user");
+  cloudApplyingState = true;
+  state = clone(seed);
+  hiddenStartNodeIds = new Set();
+  hiddenStartDeletedAt = {};
+  selectedHistoryEpisodeIds = new Set();
+  selectedDeletedEpisodeIds = new Set();
+  expandedChangeInsightIds = new Set();
+  expandedPathNodeIds = new Set();
+  recording = [];
+  recordingPauses = [];
+  recordingFromPath = false;
+  activeGuidedEpisodeId = null;
+  selectedNodeId = null;
+  pathStartId = null;
+  savedPositions = {};
+  pathTextScale = 1.06;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([]));
+  saveHiddenStartMeta();
+  localStorage.setItem(PATH_TEXT_SCALE_KEY, String(pathTextScale));
+  localStorage.setItem(POSITION_KEY, JSON.stringify(savedPositions));
+  applyPathTextScale();
+  cloudApplyingState = false;
+  render();
+  if (cloudUser) {
+    await pushCloudState({ force: true });
+    setCloudStatus("已清空并同步为空白新用户状态。");
+  } else {
+    setCloudStatus("已清空本机数据。登录云同步后，可上传这个空白状态。");
+  }
+}
+
 async function refreshCloudState(options = {}) {
   if (!cloudUser) return;
   const row = await fetchCloudRow();
@@ -545,10 +624,14 @@ function applyCloudPayload(payload) {
   cloudApplyingState = true;
   state = hydratePlannedEdges(payload.state);
   hiddenStartNodeIds = new Set(payload.hiddenStartNodeIds || []);
+  hiddenStartDeletedAt = payload.hiddenStartDeletedAt || {};
   pathTextScale = Number(payload.pathTextScale || pathTextScale);
   savedPositions = payload.savedPositions || {};
+  purgeExpiredDeletedItems(state);
+  purgeExpiredHiddenStartMeta();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([...hiddenStartNodeIds]));
+  saveHiddenStartMeta();
   localStorage.setItem(PATH_TEXT_SCALE_KEY, String(pathTextScale));
   localStorage.setItem(POSITION_KEY, JSON.stringify(savedPositions));
   selectedHistoryEpisodeIds = new Set();
@@ -594,6 +677,7 @@ function backupPayload(reason = "manual") {
     exportedAt: new Date().toISOString(),
     state: clone(state),
     hiddenStartNodeIds: [...hiddenStartNodeIds],
+    hiddenStartDeletedAt: clone(hiddenStartDeletedAt),
     pathTextScale,
     savedPositions: clone(savedPositions)
   };
@@ -623,10 +707,12 @@ function importDataBackup(event) {
       saveBackupSnapshot("before-import");
       state = hydratePlannedEdges(payload.state);
       hiddenStartNodeIds = new Set(payload.hiddenStartNodeIds || []);
+      hiddenStartDeletedAt = payload.hiddenStartDeletedAt || {};
       pathTextScale = Number(payload.pathTextScale || pathTextScale);
       savedPositions = payload.savedPositions || {};
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
       localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([...hiddenStartNodeIds]));
+      saveHiddenStartMeta();
       localStorage.setItem(PATH_TEXT_SCALE_KEY, String(pathTextScale));
       localStorage.setItem(POSITION_KEY, JSON.stringify(savedPositions));
       selectedHistoryEpisodeIds = new Set();
@@ -658,10 +744,12 @@ function restoreLatestSnapshot() {
   }
   state = hydratePlannedEdges(latest.state);
   hiddenStartNodeIds = new Set(latest.hiddenStartNodeIds || []);
+  hiddenStartDeletedAt = latest.hiddenStartDeletedAt || {};
   pathTextScale = Number(latest.pathTextScale || pathTextScale);
   savedPositions = latest.savedPositions || {};
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([...hiddenStartNodeIds]));
+  saveHiddenStartMeta();
   localStorage.setItem(PATH_TEXT_SCALE_KEY, String(pathTextScale));
   localStorage.setItem(POSITION_KEY, JSON.stringify(savedPositions));
   selectedHistoryEpisodeIds = new Set();
@@ -791,6 +879,8 @@ function buildGraph(sourceState, episodes = filteredEpisodes()) {
 }
 
 function render() {
+  purgeExpiredDeletedItems(state);
+  purgeExpiredHiddenStartMeta();
   graph = buildGraph(state);
   renderPathStartOptions();
   renderPathView();
@@ -929,7 +1019,9 @@ function activeRecordingStartOption() {
 function hideStartOption(nodeId) {
   saveBackupSnapshot("before-hide-start");
   hiddenStartNodeIds.add(nodeId);
+  hiddenStartDeletedAt[nodeId] = new Date().toISOString();
   localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([...hiddenStartNodeIds]));
+  saveHiddenStartMeta();
   scheduleCloudSync();
   if (pathStartId === nodeId) {
     pathStartId = null;
@@ -944,14 +1036,18 @@ function hideStartOption(nodeId) {
 
 function restoreStartOption(nodeId) {
   hiddenStartNodeIds.delete(nodeId);
+  delete hiddenStartDeletedAt[nodeId];
   localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([...hiddenStartNodeIds]));
+  saveHiddenStartMeta();
   scheduleCloudSync();
   render();
 }
 
 function choosePathStart(id) {
   hiddenStartNodeIds.delete(id);
+  delete hiddenStartDeletedAt[id];
   localStorage.setItem(`${STORAGE_KEY}-hidden-starts`, JSON.stringify([...hiddenStartNodeIds]));
+  saveHiddenStartMeta();
   scheduleCloudSync();
   pathStartId = id;
   selectedNodeId = id;
@@ -1420,6 +1516,8 @@ function deletePathOption(fromNodeId, toNodeId) {
   const key = pathOptionKey(fromNodeId, toNodeId);
   if (!state.hiddenPathOptions) state.hiddenPathOptions = [];
   if (!state.hiddenPathOptions.includes(key)) state.hiddenPathOptions.push(key);
+  if (!state.hiddenPathDeletedAt) state.hiddenPathDeletedAt = {};
+  state.hiddenPathDeletedAt[key] = new Date().toISOString();
   state.plannedEdges = state.plannedEdges.map((edge) => (
     edge.fromNodeId === fromNodeId && edge.toNodeId === toNodeId
       ? { ...edge, status: "archived" }
@@ -2618,7 +2716,7 @@ function renderFocus() {
 function renderHistory() {
   const episodes = filteredEpisodes().sort((a, b) => new Date(b.startedAt) - new Date(a.startedAt));
   const deletedEpisodes = state.episodes
-    .filter((ep) => ep.status === "deleted")
+    .filter((ep) => ep.status === "deleted" && !isTrashExpired(ep.deletedAt))
     .sort((a, b) => new Date(b.deletedAt || b.startedAt) - new Date(a.deletedAt || a.startedAt));
   selectedHistoryEpisodeIds = new Set([...selectedHistoryEpisodeIds].filter((id) => episodes.some((ep) => ep.id === id)));
   selectedDeletedEpisodeIds = new Set([...selectedDeletedEpisodeIds].filter((id) => deletedEpisodes.some((ep) => ep.id === id)));
@@ -2640,6 +2738,7 @@ function renderHistory() {
         <button type="button" class="secondary" data-restore-selected ${selectedDeletedEpisodeIds.size ? "" : "disabled"}>恢复所选</button>
       </div>
       ${deletedEpisodes.length ? deletedEpisodes.map((ep) => historyEpisodeRow(ep, selectedDeletedEpisodeIds, "select-deleted-episode", "restore")).join("") : "<p class='muted'>没有已删除记录。</p>"}
+      <p class="muted">已删除记录保留 7 天，超过 7 天会彻底删除。</p>
     </section>
   `;
   els.historyList.querySelectorAll("[data-select-episode]").forEach((input) => {
@@ -2729,7 +2828,7 @@ function restoreEpisodes(ids) {
   const idsToRestore = new Set(ids);
   if (!idsToRestore.size) return;
   state.episodes = state.episodes.map((ep) => (
-    idsToRestore.has(ep.id) ? { ...ep, status: "completed", deletedAt: null } : ep
+    idsToRestore.has(ep.id) && !isTrashExpired(ep.deletedAt) ? { ...ep, status: "completed", deletedAt: null } : ep
   ));
   selectedDeletedEpisodeIds = new Set([...selectedDeletedEpisodeIds].filter((id) => !idsToRestore.has(id)));
   saveState();
@@ -2752,7 +2851,7 @@ function pruneNewPathEdgeKeys() {
 
 function renderOther() {
   if (!els.trashList) return;
-  const hiddenStarts = startOptions().filter((item) => hiddenStartNodeIds.has(item.id));
+  const hiddenStarts = startOptions().filter((item) => hiddenStartNodeIds.has(item.id) && hiddenStartDeletedAt[item.id] && !isTrashExpired(hiddenStartDeletedAt[item.id]));
   const hiddenPaths = (state.hiddenPathOptions || []).map((key) => {
     const [fromNodeId, toNodeId] = key.split("->");
     return {
@@ -2761,11 +2860,11 @@ function renderOther() {
       toNodeId,
       label: `${getNode(fromNodeId)?.label || "未知"} -> ${getNode(toNodeId)?.label || "未知"}`
     };
-  });
+  }).filter((item) => state.hiddenPathDeletedAt?.[item.key] && !isTrashExpired(state.hiddenPathDeletedAt[item.key]));
   els.trashList.innerHTML = `
     <section class="trash-section">
       <h3>回收站</h3>
-      <p class="muted">这里放被你从选择里隐藏的起点和路径，不影响历史记录。</p>
+      <p class="muted">这里放被你从选择里隐藏的起点和路径，保留 7 天，超过 7 天就不能恢复。</p>
     </section>
     <section class="trash-section">
       <h3>隐藏的起点</h3>
@@ -2799,7 +2898,9 @@ function renderOther() {
 }
 
 function restorePathOption(key) {
+  if (isTrashExpired(state.hiddenPathDeletedAt?.[key])) return;
   state.hiddenPathOptions = (state.hiddenPathOptions || []).filter((item) => item !== key);
+  if (state.hiddenPathDeletedAt) delete state.hiddenPathDeletedAt[key];
   saveState();
   render();
 }
