@@ -244,7 +244,7 @@ els.pathFinish.addEventListener("click", finishRecord);
 els.pathTextSmaller.addEventListener("click", () => setPathTextScale(pathTextScale - 0.06));
 els.pathTextLarger.addEventListener("click", () => setPathTextScale(pathTextScale + 0.06));
 els.pathShell.addEventListener("scroll", positionPathDraftBar);
-window.addEventListener("resize", positionPathDraftBar);
+window.addEventListener("resize", handleViewportResize);
 els.pathDraftBar.addEventListener("pointerenter", clearPathDraftBarAutoHide);
 els.pathDraftBar.addEventListener("pointerleave", schedulePathDraftBarAutoHide);
 els.pathDraftBar.addEventListener("click", schedulePathDraftBarAutoHide);
@@ -574,8 +574,16 @@ function setPathTextScale(value) {
 }
 
 function applyPathTextScale() {
-  document.documentElement.style.setProperty("--path-node-font-size", `${Math.round(16 * pathTextScale)}px`);
-  document.documentElement.style.setProperty("--path-edge-label-font-size", `${Math.round(13 * pathTextScale)}px`);
+  const nodeBase = isMobileLayout() ? 14 : 16;
+  const edgeBase = isMobileLayout() ? 12 : 13;
+  document.documentElement.style.setProperty("--path-node-font-size", `${Math.round(nodeBase * pathTextScale)}px`);
+  document.documentElement.style.setProperty("--path-edge-label-font-size", `${Math.round(edgeBase * pathTextScale)}px`);
+}
+
+function handleViewportResize() {
+  applyPathTextScale();
+  renderPathView();
+  positionPathDraftBar();
 }
 
 function backupPayload(reason = "manual") {
@@ -1081,9 +1089,12 @@ function sortedChildren(branch) {
 }
 
 function renderPathView() {
+  const mobile = isMobileLayout();
+  const viewWidth = mobile ? 720 : 1320;
+  const minViewHeight = mobile ? 520 : 620;
   if (!pathStartId) {
     els.pathMap.innerHTML = "";
-    els.pathMap.setAttribute("viewBox", "0 0 1320 620");
+    els.pathMap.setAttribute("viewBox", `0 0 ${viewWidth} ${minViewHeight}`);
     els.pathInsight.innerHTML = "";
     els.pathInsight.classList.add("hidden");
     return;
@@ -1094,11 +1105,14 @@ function renderPathView() {
   const choicePoints = deriveChoicePoints();
   const svg = els.pathMap;
   svg.innerHTML = "";
-  svg.setAttribute("viewBox", "0 0 1320 620");
+  svg.setAttribute("viewBox", `0 0 ${viewWidth} ${minViewHeight}`);
   const nodes = [];
   const edges = [];
   const maxCount = Math.max(1, root.count);
-  const rowHeight = 82;
+  const rowHeight = mobile ? 66 : 82;
+  const startX = mobile ? 76 : 92;
+  const depthGap = mobile ? 148 : 205;
+  const startY = mobile ? 78 : 92;
   let cursor = 0;
 
   function measure(branch) {
@@ -1112,12 +1126,12 @@ function renderPathView() {
   }
 
   function place(branch, depth, parent) {
-    const x = 92 + depth * 205;
+    const x = startX + depth * depthGap;
     branch.parentNodeId = parent?.nodeId || null;
     branch.pathIds = parent ? [...parent.pathIds, branch.nodeId] : [branch.nodeId];
     const visibleChildren = branch.visibleChildren || [];
     if (!visibleChildren.length) {
-      branch.y = 92 + cursor * rowHeight;
+      branch.y = startY + cursor * rowHeight;
       cursor += 1;
     } else {
       visibleChildren.forEach((child) => place(child, depth + 1, branch));
@@ -1131,8 +1145,8 @@ function renderPathView() {
 
   measure(root);
   place(root, 0, null);
-  const height = Math.max(620, 160 + cursor * rowHeight);
-  svg.setAttribute("viewBox", `0 0 1320 ${height}`);
+  const height = Math.max(minViewHeight, (mobile ? 128 : 160) + cursor * rowHeight);
+  svg.setAttribute("viewBox", `0 0 ${viewWidth} ${height}`);
 
   edges.forEach((edge) => {
     const parentTotal = Math.max(1, edge.from.count);
@@ -1270,12 +1284,22 @@ function renderPathView() {
 
 function pathNodeDesiredWidth(label) {
   const textUnits = [...label].reduce((sum, char) => sum + (/[\u4e00-\u9fff]/.test(char) ? 0.98 : 0.52), 0);
-  const textWidth = textUnits * 16 * pathTextScale;
-  return Math.round(Math.max(42, Math.min(152, textWidth + 8 * pathTextScale)));
+  const mobile = isMobileLayout();
+  const baseFont = mobile ? 14 : 16;
+  const padding = mobile ? 18 : 8;
+  const textWidth = textUnits * baseFont * pathTextScale;
+  return Math.round(Math.max(mobile ? 48 : 42, Math.min(mobile ? 118 : 152, textWidth + padding * pathTextScale)));
 }
 
 function pathNodeHeight(branch) {
-  return Math.round((branch.depth === 0 ? 38 : 34) * pathTextScale);
+  const mobile = isMobileLayout();
+  const rootHeight = mobile ? 34 : 38;
+  const childHeight = mobile ? 32 : 34;
+  return Math.round((branch.depth === 0 ? rootHeight : childHeight) * pathTextScale);
+}
+
+function isMobileLayout() {
+  return window.matchMedia?.("(max-width: 760px)").matches || window.innerWidth <= 760;
 }
 
 function shouldShowPathNodeDelete(branch) {

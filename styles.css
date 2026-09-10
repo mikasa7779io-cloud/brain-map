@@ -1706,21 +1706,136 @@ menu {
 }
 
 @media (max-width: 760px) {
+  body {
+    font-size: 14px;
+  }
+
   #app {
-    padding: 12px;
+    padding: 10px 12px 14px;
   }
 
   .app-header {
-    align-items: stretch;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 8px;
+    padding: 0 0 10px;
   }
 
-  .header-actions, .record-head, .path-toolbar, .path-toolbar-actions {
+  h1 {
+    font-size: 24px;
+    text-align: center;
+  }
+
+  .app-header p {
+    margin-top: 2px;
+    font-size: 13px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .header-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .header-actions > * {
+    width: 100%;
+    min-height: 40px;
+  }
+
+  .tabs {
+    width: 100%;
+    margin-bottom: 12px;
+    padding: 4px;
+    border-radius: 18px;
+  }
+
+  .tab {
+    flex: 1;
+    min-width: 0;
+    min-height: 42px;
+    font-size: 15px;
+  }
+
+  .path-toolbar {
+    display: grid;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .start-picker {
+    max-width: 100%;
+    flex-basis: auto;
+    gap: 4px;
+    font-size: 13px;
+  }
+
+  .start-picker-button {
+    min-height: 42px;
+    font-size: 16px;
+    padding-inline: 14px;
+  }
+
+  .path-toolbar-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .path-toolbar-actions button {
+    min-height: 40px;
+    padding-inline: 10px;
+  }
+
+  .path-scale-controls {
+    justify-self: end;
+    padding: 3px;
+  }
+
+  .path-scale-controls button {
+    min-width: 36px;
+    min-height: 32px;
+    padding-inline: 8px;
+    font-size: 12px;
+  }
+
+  .path-shell {
+    height: 54vh;
+    min-height: 360px;
+    border-radius: 18px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.055);
+  }
+
+  #pathMap {
+    width: max(100%, 760px);
+    min-height: 100%;
+  }
+
+  .path-node text {
+    font-size: var(--path-node-font-size, 15px);
+  }
+
+  .path-node rect {
+    filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.045));
+  }
+
+  .detail-panel {
+    top: 70px;
+    right: 10px;
+    max-width: calc(100vw - 40px);
+  }
+
+  .record-head {
     flex-direction: column;
     align-items: stretch;
   }
 
-  .header-actions > *, .record-head button, .path-toolbar-actions > * {
+  .record-head button {
     width: 100%;
   }
 
@@ -1728,7 +1843,10 @@ menu {
     grid-template-columns: 1fr;
   }
 
-  .map-shell {
-    min-height: 460px;
+  .record-panel {
+    width: min(430px, calc(100vw - 24px));
+    max-height: min(76vh, 620px);
+    padding: 14px;
+    border-radius: 18px;
   }
 }
