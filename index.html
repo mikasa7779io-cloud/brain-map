@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Brain Map</title>
+  <link rel="stylesheet" href="./styles.css?v=isolated-supabase-sync-1524">
+</head>
+<body>
+  <main id="app">
+    <header class="app-header">
+      <div>
+        <h1>Brain Map</h1>
+        <p>看见大脑已经自动化的路</p>
+      </div>
+      <div class="header-actions">
+        <button id="cloudSyncButton" class="sync-pill" type="button">本机保存</button>
+        <select id="rangeSelect" aria-label="时间范围">
+          <option value="7">最近 7 天</option>
+          <option value="30" selected>最近 30 天</option>
+          <option value="all">全部</option>
+        </select>
+      </div>
+    </header>
+
+    <section class="tabs" aria-label="视图切换">
+      <button class="tab active" data-view="path">路径</button>
+      <button class="tab" data-view="change">变化</button>
+      <button class="tab" data-view="history">历史</button>
+    </section>
+
+    <section id="recordPanel" class="record-panel hidden" aria-label="快速记录">
+      <div class="record-head">
+        <div>
+          <h2 id="recordTitle">从哪里开始？</h2>
+          <div id="currentPath" class="path-line">还没有选择起点</div>
+        </div>
+        <div class="record-head-actions">
+          <button id="backRecord" class="ghost hidden" type="button">返回</button>
+          <button id="cancelRecord" class="ghost" type="button">取消</button>
+        </div>
+      </div>
+      <div id="choiceGrid" class="choice-grid"></div>
+      <menu id="pathPickerActions" class="path-picker-actions hidden">
+        <button id="confirmOldStep" class="primary" type="button" disabled>加入这次记录</button>
+        <button id="cancelOldStep" class="ghost" type="button">取消</button>
+      </menu>
+      <div class="record-actions">
+        <label class="awareness-toggle">
+          <input id="awareToggle" type="checkbox">
+          <span>这里我有意识到</span>
+        </label>
+        <button id="pauseStep" class="secondary">⏸ 暂停一下</button>
+        <button id="undoStep" class="secondary">撤回</button>
+        <button id="finishRecord" class="primary">完成记录</button>
+      </div>
+    </section>
+
+    <section id="pathView" class="view active-view">
+      <div class="path-toolbar">
+        <div class="start-picker">
+          <span>起点</span>
+          <button id="startPickerButton" class="start-picker-button" type="button">焦虑 · 0 次</button>
+          <div id="startPickerPanel" class="start-picker-panel hidden">
+            <input id="startSearchInput" aria-label="搜索起点" placeholder="搜索真实起点">
+            <div class="picker-section">
+              <h3>最近</h3>
+              <div id="recentStarts" class="start-chips"></div>
+            </div>
+            <div class="picker-section">
+              <h3>高频起点</h3>
+              <div id="startOptionsList" class="start-options-list"></div>
+            </div>
+          </div>
+        </div>
+        <div class="path-toolbar-actions">
+          <button id="recordButton" class="secondary">新的起点</button>
+          <button id="pathRecordButton" class="primary">从这里记录</button>
+          <div class="path-scale-controls" aria-label="路径字体大小">
+            <button id="pathTextSmaller" class="ghost" type="button" aria-label="缩小路径字体">A−</button>
+            <button id="pathTextLarger" class="ghost" type="button" aria-label="放大路径字体">A+</button>
+          </div>
+        </div>
+      </div>
+      <div id="pathDraftBar" class="path-draft-bar hidden">
+        <div>
+          <span class="draft-label">当前正在走</span>
+          <div id="pathDraftLine" class="path-line">还没有选择起点</div>
+        </div>
+        <div class="draft-actions">
+          <button id="pathAddOld" class="secondary">旧的一步</button>
+          <button id="pathAddNext" class="secondary new-step-button">+ 新的一步</button>
+          <button id="pathPause" class="secondary">⏸ 暂停一下</button>
+          <button id="pathUndo" class="secondary">撤回</button>
+          <button id="pathCancel" class="ghost">取消</button>
+          <button id="pathFinish" class="primary">完成 Episode</button>
+        </div>
+      </div>
+      <div id="pauseCard" class="pause-card hidden">
+        <div class="pause-card-body">
+          <div id="pauseCountdown" class="pause-countdown">10</div>
+          <div id="pausePrompt" class="pause-prompt">先别反应。</div>
+        </div>
+        <menu>
+          <button id="skipPause" class="ghost" type="button">跳过</button>
+        </menu>
+      </div>
+      <div class="path-shell">
+        <svg id="pathMap" role="img" aria-label="从一个节点出发的常见路径"></svg>
+      </div>
+      <aside id="pathInsight" class="detail-panel"></aside>
+      <div id="pathContextMenu" class="path-context-menu hidden">
+        <button id="pathContextDelete" type="button">删除</button>
+      </div>
+    </section>
+
+    <section id="changeView" class="view">
+      <div class="change-ai-head">
+        <div>
+          <h2>变化</h2>
+          <p>AI 帮你从真实记录里挑出最值得留意的事</p>
+        </div>
+        <div class="change-range-tabs" aria-label="变化时间范围">
+          <button class="active" type="button" data-change-range="today">今天</button>
+          <button type="button" data-change-range="7">7天</button>
+          <button type="button" data-change-range="30">30天</button>
+        </div>
+      </div>
+      <div id="changeGrid" class="insights-grid"></div>
+    </section>
+
+    <section id="historyView" class="view">
+      <div class="history-card">
+        <h2>历史记录</h2>
+        <div class="data-backup-actions">
+          <button id="exportData" class="secondary" type="button">导出备份</button>
+          <button id="importData" class="secondary" type="button">导入恢复</button>
+          <button id="restoreSnapshot" class="ghost" type="button">恢复删除前</button>
+          <input id="importDataInput" class="hidden" type="file" accept="application/json,.json">
+        </div>
+        <div id="historyList" class="history-list"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <dialog id="newNodeDialog">
+    <form method="dialog" class="dialog-form">
+      <h2 id="newNodeTitle">种下 0 次新路</h2>
+      <input id="newNodeInput" autocomplete="off" placeholder="我下次想试：例如轻食、喝水、打开消息">
+      <div id="nodeMatches" class="node-matches"></div>
+      <menu>
+        <button id="confirmNewNode" value="default" class="primary">种下</button>
+        <button value="cancel" class="ghost">取消</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="deleteConfirmDialog">
+    <form method="dialog" class="dialog-form">
+      <h2>删除这个选项？</h2>
+      <p id="deleteConfirmText" class="muted">删除后会从当前路径里隐藏。</p>
+      <menu>
+        <button id="cancelDeletePath" value="cancel" class="ghost">否</button>
+        <button id="confirmDeletePath" value="default" class="primary delete">是，删除</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="cloudSyncDialog">
+    <form method="dialog" class="dialog-form cloud-sync-form">
+      <h2>云同步</h2>
+      <p id="cloudSyncStatus" class="muted">本机数据会先保存，登录后再同步到 Brain Map 单独的数据表。</p>
+      <div id="cloudLoginFields" class="cloud-login-fields">
+        <input id="cloudEmail" type="email" autocomplete="email" placeholder="邮箱">
+        <input id="cloudPassword" type="password" autocomplete="current-password" placeholder="密码">
+      </div>
+      <div class="cloud-sync-actions">
+        <button id="cloudLogin" class="primary" type="button">登录同步</button>
+        <button id="cloudUploadLocal" class="secondary" type="button">上传本机</button>
+        <button id="cloudUseRemote" class="secondary" type="button">使用云端</button>
+        <button id="cloudRefresh" class="ghost" type="button">检查云端</button>
+        <button id="cloudLogout" class="ghost" type="button">退出</button>
+        <button value="cancel" class="ghost" type="submit">关闭</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.4/dist/cytoscape.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="./app.js?v=isolated-supabase-sync-1519"></script>
+</body>
+</html>
