@@ -160,6 +160,7 @@ const els = {
   pathFinish: document.getElementById("pathFinish"),
   pathView: document.getElementById("pathView"),
   pathMap: document.getElementById("pathMap"),
+  pathEdgeKindButton: document.getElementById("pathEdgeKindButton"),
   pathContextMenu: document.getElementById("pathContextMenu"),
   pathContextDelete: document.getElementById("pathContextDelete"),
   pathShell: document.querySelector(".path-shell"),
@@ -217,6 +218,7 @@ els.pathRecordButton.addEventListener("click", () => {
 });
 els.pathAddOld.addEventListener("click", () => openNewNodeDialog("path-old"));
 els.pathAddNext.addEventListener("click", () => openNewNodeDialog("path-new"));
+els.pathEdgeKindButton.addEventListener("click", toggleCurrentEdgeKind);
 els.pathPause.addEventListener("click", addPausePoint);
 els.skipPause.addEventListener("click", finishPauseCard);
 els.pathUndo.addEventListener("click", undoStep);
@@ -684,6 +686,7 @@ function handleViewportResize() {
   applyPathTextScale();
   renderPathView();
   positionPathDraftBar();
+  positionEdgeKindButton();
 }
 
 function backupPayload(reason = "manual") {
@@ -1354,9 +1357,7 @@ function renderPathView() {
     group.setAttribute("tabindex", "0");
     group.setAttribute("role", "button");
     group.setAttribute("aria-label", `${label}，双击编辑`);
-    group.addEventListener("click", (event) => {
-      handlePathNodeClick(branch.nodeId);
-    });
+    group.addEventListener("click", () => handlePathNodeClick(branch.nodeId));
     group.addEventListener("contextmenu", (event) => {
       if (!recordingFromPath || !shouldShowPathNodeDelete(branch)) return;
       event.preventDefault();
@@ -2227,6 +2228,7 @@ function renderPathDraftBar() {
   const active = recordingFromPath && recording.length;
   if (!active) clearPathDraftBarAutoHide();
   els.pathDraftBar.classList.toggle("hidden", !active);
+  positionEdgeKindButton();
   if (!active) return;
   els.pathDraftBar.classList.remove("is-fading");
   els.pathDraftLine.textContent = draftPathLabel();
@@ -2234,6 +2236,43 @@ function renderPathDraftBar() {
   els.pathFinish.disabled = recording.length === 0;
   requestAnimationFrame(positionPathDraftBar);
   schedulePathDraftBarAutoHide();
+}
+
+function currentRecordingEdgeKey() {
+  if (!recordingFromPath || recording.length < 2) return null;
+  return pathOptionKey(recording[recording.length - 2], recording[recording.length - 1]);
+}
+
+function isCurrentRecordingEdgeNew() {
+  const key = currentRecordingEdgeKey();
+  if (!key) return false;
+  return isEdgeMarkedNew(key);
+}
+
+function toggleCurrentEdgeKind() {
+  const key = currentRecordingEdgeKey();
+  if (!key) return;
+  toggleEdgeKind(key);
+}
+
+function isEdgeMarkedNew(key) {
+  return Boolean(key && (freshRecordingEdgeKeys.has(key) || (state.newPathEdgeKeys || []).includes(key)));
+}
+
+function toggleEdgeKind(key) {
+  if (!key) return;
+  const keys = new Set(state.newPathEdgeKeys || []);
+  if (isEdgeMarkedNew(key)) {
+    keys.delete(key);
+    freshRecordingEdgeKeys.delete(key);
+  } else {
+    keys.add(key);
+    freshRecordingEdgeKeys.add(key);
+  }
+  state.newPathEdgeKeys = [...keys];
+  saveState();
+  render();
+  requestAnimationFrame(positionEdgeKindButton);
 }
 
 function schedulePathDraftBarAutoHide() {
@@ -2273,6 +2312,26 @@ function positionPathDraftBar() {
   top = clamp(top, 92, Math.max(92, viewRect.height - barRect.height - 12));
   els.pathDraftBar.style.setProperty("--draft-bar-left", `${Math.round(left)}px`);
   els.pathDraftBar.style.setProperty("--draft-bar-top", `${Math.round(top)}px`);
+  positionEdgeKindButton();
+}
+
+function positionEdgeKindButton() {
+  const key = currentRecordingEdgeKey();
+  const currentId = recording[recording.length - 1];
+  const nodeEl = currentId ? Array.from(els.pathMap.querySelectorAll(".path-node")).find((item) => item.dataset.nodeId === currentId) : null;
+  if (!key || !nodeEl || !recordingFromPath) {
+    els.pathEdgeKindButton.classList.add("hidden");
+    return;
+  }
+  const nodeRect = nodeEl.getBoundingClientRect();
+  const viewRect = els.pathView.getBoundingClientRect();
+  const isNew = isEdgeMarkedNew(key);
+  els.pathEdgeKindButton.classList.toggle("is-new", isNew);
+  els.pathEdgeKindButton.setAttribute("aria-label", isNew ? "改回旧路" : "标为新路");
+  els.pathEdgeKindButton.title = isNew ? "改回旧路" : "标为新路";
+  els.pathEdgeKindButton.style.left = `${Math.round(nodeRect.right - viewRect.left + 1)}px`;
+  els.pathEdgeKindButton.style.top = `${Math.round(nodeRect.top - viewRect.top - 15)}px`;
+  els.pathEdgeKindButton.classList.remove("hidden");
 }
 
 function showOldStepChoices() {

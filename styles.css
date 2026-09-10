@@ -764,6 +764,52 @@ h2 {
   box-shadow: none;
 }
 
+.path-edge-kind-button {
+  position: absolute;
+  z-index: 36;
+  width: 26px;
+  min-height: 26px;
+  padding: 0;
+  border: 1px solid rgba(150, 150, 145, 0.72);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.98);
+  color: #4b4f58;
+  box-shadow: 0 6px 12px rgba(32, 32, 32, 0.14);
+  transform: translate(-50%, -50%);
+}
+
+.path-edge-kind-button svg {
+  width: 17px;
+  height: 17px;
+  display: block;
+  margin: 0 auto;
+}
+
+.path-edge-kind-button .toggle-arc {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.3;
+  stroke-linecap: round;
+}
+
+.path-edge-kind-button .toggle-arrow {
+  fill: currentColor;
+}
+
+.path-edge-kind-button.is-new {
+  border-color: rgba(53, 199, 89, 0.72);
+  background: #f1fbf3;
+  color: #176d2b;
+}
+
+.path-edge-kind-button:hover,
+.path-edge-kind-button:focus-visible {
+  border-color: var(--recording-active);
+  background: #f7f9ff;
+  color: var(--recording-active);
+  transform: translate(-50%, -50%);
+}
+
 .path-edge.new {
   stroke: var(--new-path);
   opacity: 0.9;
