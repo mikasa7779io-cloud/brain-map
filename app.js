@@ -4,6 +4,8 @@ const PATH_TEXT_SCALE_KEY = `${STORAGE_KEY}-path-text-scale`;
 const BACKUP_SNAPSHOT_KEY = `${STORAGE_KEY}-backup-snapshots`;
 const HIDDEN_START_META_KEY = `${STORAGE_KEY}-hidden-starts-meta`;
 const TRASH_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const BODY_CLUSTER_LABEL = "身体反应";
+const BODY_REACTION_PRESETS = ["头疼", "耸肩", "驼背", "胸椎不适", "胸闷", "胸口有火", "胃凉", "屁股不舒服", "腿紧张", "腿酸", "脚不舒服"];
 const SUPABASE_URL = "https://pjyqpbsyryrjrjhzptya.supabase.co";
 const SUPABASE_KEY = "sb_publishable_GnE9iXy2uw8oBStdXzp5IA_VPBo03DK";
 const CLOUD_TABLE = "brain_map_state";
@@ -45,6 +47,7 @@ function episode(nodeIds, startedAt, aware = false, pauseMarkers = [], meta = {}
     pauseMarkers,
     source: meta.source || null,
     bodySkipped: Boolean(meta.bodySkipped),
+    bodyReactions: Array.isArray(meta.bodyReactions) ? meta.bodyReactions : [],
     steps: nodeIds.map((nodeId, order) => ({ id: uid(), nodeId, order }))
   };
 }
@@ -88,6 +91,7 @@ let recordingPauses = [];
 let recordingSource = null;
 let recordingBodyPromptDone = false;
 let recordingBodySkipped = false;
+let recordingBodyReactions = [];
 let newNodeContext = "path";
 let hiddenRecorderOptionIds = new Set();
 let temporaryNodeIds = new Set();
@@ -297,6 +301,13 @@ function loadState() {
       parsed.hiddenPathDeletedAt = {};
       migrated = true;
     }
+    parsed.episodes = (parsed.episodes || []).map((ep) => {
+      const bodyReactions = Array.isArray(ep.bodyReactions) ? ep.bodyReactions : [];
+      const bodySkipped = Boolean(ep.bodySkipped);
+      if (ep.bodyReactions === bodyReactions && ep.bodySkipped === bodySkipped) return ep;
+      migrated = true;
+      return { ...ep, bodySkipped, bodyReactions };
+    });
     (parsed.hiddenPathOptions || []).forEach((key) => {
       if (!parsed.hiddenPathDeletedAt[key]) {
         parsed.hiddenPathDeletedAt[key] = new Date().toISOString();
@@ -777,6 +788,13 @@ function isHiddenPathOption(fromNodeId, toNodeId) {
 
 function hydratePlannedEdges(sourceState) {
   let changed = false;
+  sourceState.episodes = (sourceState.episodes || []).map((ep) => {
+    const bodyReactions = Array.isArray(ep.bodyReactions) ? ep.bodyReactions : [];
+    const bodySkipped = Boolean(ep.bodySkipped);
+    if (ep.bodyReactions === bodyReactions && ep.bodySkipped === bodySkipped) return ep;
+    changed = true;
+    return { ...ep, bodySkipped, bodyReactions };
+  });
   sourceState.plannedEdges = (sourceState.plannedEdges || []).map((edge) => {
     const hydrated = {
       firstWalkedEpisodeId: null,
@@ -852,10 +870,18 @@ function orderedLabelsWithPauses(ep) {
   const pauseIndexes = new Set((ep.pauseMarkers || []).map((marker) => marker.afterStepIndex));
   const parts = [];
   ids.forEach((id, index) => {
-    parts.push(getNode(id)?.label || "未知");
+    parts.push(labelForBodyClusterStep(id, ep.bodyReactions));
     if (pauseIndexes.has(index)) parts.push("⏸");
   });
   return parts.join(" -> ");
+}
+
+function labelForBodyClusterStep(nodeId, bodyReactions = []) {
+  const label = getNode(nodeId)?.label || "未知";
+  if (label === BODY_CLUSTER_LABEL && bodyReactions?.length) {
+    return `${BODY_CLUSTER_LABEL}（${bodyReactions.join(" / ")}）`;
+  }
+  return label;
 }
 
 function buildGraph(sourceState, episodes = filteredEpisodes()) {
@@ -1797,6 +1823,7 @@ function buildInsightPayload(range = "today") {
     episodes,
     previousEpisodes,
     nodeFacts: nodeFactsForEpisodes(episodes),
+    bodyReactionFacts: bodyReactionFactsForEpisodes(episodes),
     edgeFacts: edgeFactsForEpisodes(episodes, previousEpisodes),
     pauseFacts: pauseFactsForEpisodes(episodes)
   };
@@ -1866,6 +1893,32 @@ function nodeFactsForEpisodes(episodes) {
     .sort((a, b) => b.count - a.count);
 }
 
+function bodyReactionFactsForEpisodes(episodes) {
+  const facts = new Map();
+  episodes.forEach((ep) => {
+    const seenInEpisode = new Set();
+    (ep.bodyReactions || []).forEach((rawLabel) => {
+      const label = String(rawLabel || "").trim();
+      if (!label) return;
+      const key = normalize(label);
+      if (seenInEpisode.has(key)) return;
+      seenInEpisode.add(key);
+      const fact = facts.get(key) || {
+        id: key,
+        label,
+        count: 0,
+        episodeIds: new Set()
+      };
+      fact.count += 1;
+      fact.episodeIds.add(ep.id);
+      facts.set(key, fact);
+    });
+  });
+  return Array.from(facts.values())
+    .map((fact) => ({ ...fact, episodeIds: [...fact.episodeIds] }))
+    .sort((a, b) => b.count - a.count);
+}
+
 function edgeFactsForEpisodes(episodes, previousEpisodes) {
   const current = edgeCountsFor(episodes);
   const previous = edgeCountsFor(previousEpisodes);
@@ -1916,13 +1969,14 @@ function mockAiInsightProvider(payload) {
     insights.push(insight);
   };
 
-  const bodyFact = payload.nodeFacts.find((fact) => fact.count >= 2 && looksLikeBodySignal(fact.label));
-  addInsight(bodyFact && {
-    id: `body-${bodyFact.id}`,
+  const repeatedBodyFact = payload.bodyReactionFacts.find((fact) => fact.count >= 2);
+  const bodyInsight = repeatedBodyFact ? {
+    id: `body-${repeatedBodyFact.id}`,
     title: "一个身体信号反复出现",
-    body: `${payload.label}有 ${bodyFact.count} 次记录出现了「${bodyFact.label}」。这可能不是普通内容，而是一个值得继续观察的身体信号。`,
-    evidenceEpisodeIds: bodyFact.episodeIds
-  });
+    body: `${payload.label}有 ${repeatedBodyFact.count} 次记录出现了「${repeatedBodyFact.label}」。这可能不是普通内容，而是一个值得继续观察的身体信号。`,
+    evidenceEpisodeIds: repeatedBodyFact.episodeIds
+  } : bodyReactionsInsight(payload);
+  addInsight(bodyInsight);
 
   const pauseFact = payload.pauseFacts[0];
   addInsight(pauseFact && {
@@ -1940,7 +1994,7 @@ function mockAiInsightProvider(payload) {
     evidenceEpisodeIds: changedEdge.episodeIds
   });
 
-  const repeatedNode = payload.nodeFacts.find((fact) => fact.count >= 3 && !usedIds.has(`body-${fact.id}`));
+  const repeatedNode = payload.nodeFacts.find((fact) => fact.count >= 3 && fact.label !== BODY_CLUSTER_LABEL && !usedIds.has(`body-${fact.id}`));
   addInsight(repeatedNode && {
     id: `node-${repeatedNode.id}`,
     title: "一个节点反复出现",
@@ -1949,6 +2003,23 @@ function mockAiInsightProvider(payload) {
   });
 
   return insights;
+}
+
+function bodyReactionsInsight(payload) {
+  if (!payload.bodyReactionFacts.length) return null;
+  const labels = payload.bodyReactionFacts.slice(0, 4).map((fact) => `「${fact.label}」`);
+  const evidenceEpisodeIds = new Set();
+  payload.bodyReactionFacts.forEach((fact) => {
+    fact.episodeIds.forEach((id) => evidenceEpisodeIds.add(id));
+  });
+  const extraCount = Math.max(0, payload.bodyReactionFacts.length - labels.length);
+  const suffix = extraCount ? `，还有 ${extraCount} 个` : "";
+  return {
+    id: "body-reactions-recorded",
+    title: "身体反应被记录下来",
+    body: `${payload.label}记录到了 ${payload.bodyReactionFacts.length} 种身体反应：${labels.join(" / ")}${suffix}。它们先作为证据留下来，之后如果反复出现，AI 会更明确地提醒你。`,
+    evidenceEpisodeIds: [...evidenceEpisodeIds]
+  };
 }
 
 function looksLikeBodySignal(label) {
@@ -2220,10 +2291,14 @@ function confirmOldStepChoice() {
 }
 
 function draftPathLabel() {
+  if (!recordingBodyPromptDone && recordingBodyReactions.length) {
+    const trigger = getNode(recording[0])?.label || "未知";
+    return `${trigger} -> ${BODY_CLUSTER_LABEL}（${recordingBodyReactions.join(" / ")}）`;
+  }
   const pauseIndexes = new Set(recordingPauses.map((marker) => marker.afterStepIndex));
   const parts = [];
   recording.forEach((id, index) => {
-    parts.push(getNode(id)?.label || "未知");
+    parts.push(labelForBodyClusterStep(id, recordingBodyReactions));
     if (pauseIndexes.has(index)) parts.push("⏸");
   });
   return parts.join(" -> ");
@@ -2926,6 +3001,7 @@ function startRecording(startId) {
   recordingSource = null;
   recordingBodyPromptDone = Boolean(startId);
   recordingBodySkipped = false;
+  recordingBodyReactions = [];
   hiddenRecorderOptionIds = new Set();
   freshRecordingNodeIds = new Set();
   freshRecordingEdgeKeys = new Set();
@@ -2951,6 +3027,7 @@ function stopRecording(options = { discardTemporary: true }) {
   recordingSource = null;
   recordingBodyPromptDone = false;
   recordingBodySkipped = false;
+  recordingBodyReactions = [];
   newNodeContext = "path";
   activeGuidedEpisodeId = null;
   selectedOldStepOption = null;
@@ -2973,9 +3050,12 @@ function undoStep() {
   recording.pop();
   recordingPauses = recordingPauses.filter((marker) => marker.afterStepIndex < recording.length);
   if (!recordingFromPath) {
-    if (recording.length <= 1) {
+    if (!recordingBodyPromptDone && recording.length) {
+      recordingBodySkipped = false;
+    } else if (recording.length <= 1) {
       recordingBodyPromptDone = Boolean(recording.length);
       recordingBodySkipped = false;
+      recordingBodyReactions = [];
     }
     syncGuidedAutosave();
   }
@@ -3003,7 +3083,8 @@ function upsertRecordingEpisode() {
   const existing = existingIndex >= 0 ? state.episodes[existingIndex] : null;
   const saved = episode(recording, existing?.startedAt || new Date().toISOString(), els.awareToggle.checked || pauses.length > 0, pauses, {
     source: recordingSource,
-    bodySkipped: recordingBodySkipped
+    bodySkipped: recordingBodySkipped,
+    bodyReactions: recordingBodyReactions
   });
   if (existing) {
     saved.id = existing.id;
@@ -3044,11 +3125,13 @@ function goBackRecordStep() {
   if (stage === "trigger") {
     recordingSource = null;
   } else if (stage === "body") {
-    recording.pop();
+    recording = [];
+    recordingBodyReactions = [];
     recordingBodyPromptDone = false;
     recordingBodySkipped = false;
   } else if (stage === "path") {
-    if (recordingBodySkipped && recording.length === 1) {
+    if ((recordingBodySkipped || recordingHasOnlyBodyCluster()) && recording.length <= 2) {
+      removeBodyClusterFromRecording();
       recordingBodyPromptDone = false;
       recordingBodySkipped = false;
     } else if (recording.length) {
@@ -3056,6 +3139,7 @@ function goBackRecordStep() {
       if (recording.length <= 1) {
         recordingBodyPromptDone = Boolean(recording.length);
         recordingBodySkipped = false;
+        recordingBodyReactions = [];
       }
     }
   }
@@ -3115,6 +3199,9 @@ function renderRecorder() {
     if (selectedOldStepOption?.id === option.id) {
       button.classList.add("selected-old-step");
     }
+    if (stage === "body" && recordingBodyReactions.includes(option.label)) {
+      button.classList.add("selected-body-step");
+    }
     button.innerHTML = `<strong>${escapeHtml(option.label)}</strong><span>${option.count} 次</span>`;
     button.addEventListener("click", () => {
       if (isPathPicker) {
@@ -3122,9 +3209,11 @@ function renderRecorder() {
         renderRecorder();
         return;
       }
-      chooseRecorderOption(stage, option);
+      if (stage === "body") toggleBodyRecorderOption(option);
+      else chooseRecorderOption(stage, option);
       syncGuidedAutosave();
       if (recordingFromPath) els.recordPanel.classList.add("hidden");
+      renderRecorder();
       render();
     });
     const remove = document.createElement("button");
@@ -3140,10 +3229,29 @@ function renderRecorder() {
     els.choiceGrid.appendChild(card);
   });
   if (stage === "body") {
+    const selectedBodyItems = bodySelectionItems();
+    const selectedBodyCount = selectedBodyItems.length;
+    if (selectedBodyCount) {
+      renderSelectedBodySummary(selectedBodyItems);
+      const next = document.createElement("button");
+      next.className = "choice-card body-continue-card";
+      next.innerHTML = `<strong>继续记录后面</strong><span>已选 ${selectedBodyCount} 个身体反应</span>`;
+      next.addEventListener("click", () => {
+        ensureBodyClusterInRecording();
+        recordingBodyPromptDone = true;
+        recordingBodySkipped = false;
+        syncGuidedAutosave();
+        renderRecorder();
+        render();
+      });
+      els.choiceGrid.appendChild(next);
+    }
     const skip = document.createElement("button");
     skip.className = "choice-card";
     skip.innerHTML = "<strong>暂时没注意到身体</strong><span>跳过，继续记录后面</span>";
     skip.addEventListener("click", () => {
+      recording = recording.slice(0, 1);
+      recordingBodyReactions = [];
       recordingBodyPromptDone = true;
       recordingBodySkipped = true;
       syncGuidedAutosave();
@@ -3159,14 +3267,28 @@ function renderRecorder() {
   els.choiceGrid.appendChild(add);
 }
 
+function renderSelectedBodySummary(items) {
+  const summary = document.createElement("section");
+  summary.className = "body-selected-summary";
+  summary.innerHTML = `
+    <span>已选</span>
+    <div>
+      ${items.map((label) => `<button type="button" data-remove-body="${escapeHtml(label)}">${escapeHtml(label)}</button>`).join("")}
+    </div>
+  `;
+  summary.querySelectorAll("[data-remove-body]").forEach((button) => {
+    button.addEventListener("click", () => {
+      recordingBodyReactions = recordingBodyReactions.filter((label) => label !== button.dataset.removeBody);
+      syncGuidedAutosave();
+      renderRecorder();
+      render();
+    });
+  });
+  els.choiceGrid.appendChild(summary);
+}
+
 function chooseRecorderOption(stage, option) {
   let id = option.id;
-  if (stage === "body" && !id) {
-    const created = node(uid(), option.label);
-    state.nodes.push(created);
-    temporaryNodeIds.add(created.id);
-    id = created.id;
-  }
   recording.push(id);
   if (recording.length === 1) {
     selectedNodeId = id;
@@ -3176,6 +3298,50 @@ function chooseRecorderOption(stage, option) {
     recordingBodyPromptDone = true;
     recordingBodySkipped = false;
   }
+}
+
+function bodySelectionItems() {
+  return recordingBodyPromptDone ? [] : recordingBodyReactions;
+}
+
+function toggleBodyRecorderOption(option) {
+  const label = option.label;
+  const selected = new Set(recordingBodyReactions);
+  if (selected.has(label)) selected.delete(label);
+  else selected.add(label);
+  recordingBodyReactions = Array.from(selected);
+  recordingBodySkipped = false;
+}
+
+function ensureBodyClusterInRecording() {
+  if (!recording.length || !recordingBodyReactions.length) return null;
+  const bodyNode = ensureNodeByLabel(BODY_CLUSTER_LABEL);
+  if (recording[1] !== bodyNode.id) {
+    recording = [recording[0], bodyNode.id, ...recording.slice(1).filter((id) => id !== bodyNode.id)];
+  }
+  return bodyNode.id;
+}
+
+function removeBodyClusterFromRecording() {
+  const bodyNode = state.nodes.find((n) => n.normalizedLabel === normalize(BODY_CLUSTER_LABEL));
+  if (!bodyNode) return;
+  recording = recording.filter((id) => id !== bodyNode.id);
+}
+
+function recordingHasOnlyBodyCluster() {
+  const bodyNode = state.nodes.find((n) => n.normalizedLabel === normalize(BODY_CLUSTER_LABEL));
+  return Boolean(bodyNode && recording.length === 2 && recording[1] === bodyNode.id);
+}
+
+function ensureNodeByLabel(label) {
+  const normalized = normalize(label);
+  let existing = state.nodes.find((n) => n.normalizedLabel === normalized);
+  if (!existing) {
+    existing = node(uid(), label);
+    state.nodes.push(existing);
+    saveState();
+  }
+  return existing;
 }
 
 function pathIdsForSelectedNode(nodeId) {
@@ -3199,14 +3365,14 @@ function recorderStage() {
   if (recordingFromPath) return "path";
   if (!recordingSource && !recording.length) return "source";
   if (!recording.length) return "trigger";
-  if (!recordingBodyPromptDone && recording.length === 1) return "body";
+  if (!recordingBodyPromptDone && recording.length >= 1) return "body";
   return "path";
 }
 
 function recorderTitle(stage, currentId) {
   if (stage === "source") return "刚才，是从哪里开始的？";
   if (stage === "trigger") return recordingSource === "external" ? "发生了什么？" : "想到了什么？";
-  if (stage === "body") return "身体哪里最明显？";
+  if (stage === "body") return "身体有没有反应？";
   return currentId ? "接下来呢？" : "从哪里开始？";
 }
 
@@ -3251,25 +3417,15 @@ function startOptions() {
 }
 
 function bodyOptions() {
-  const presets = ["胸口紧", "喉咙堵", "心跳快", "胃缩", "肩膀紧"];
   const counts = new Map();
-  state.nodes.forEach((n) => {
-    if (presets.includes(n.label)) counts.set(n.id, 0);
-  });
+  BODY_REACTION_PRESETS.forEach((label) => counts.set(label, 0));
   filteredEpisodes().forEach((ep) => {
-    orderedIds(ep).forEach((id) => {
-      const label = getNode(id)?.label;
-      if (presets.includes(label)) counts.set(id, (counts.get(id) || 0) + 1);
+    (ep.bodyReactions || []).forEach((label) => {
+      if (BODY_REACTION_PRESETS.includes(label)) counts.set(label, (counts.get(label) || 0) + 1);
     });
   });
-  presets.forEach((label) => {
-    if ([...counts.keys()].some((id) => getNode(id)?.label === label)) return;
-    const existing = state.nodes.find((n) => n.normalizedLabel === normalize(label));
-    if (existing) counts.set(existing.id, 0);
-  });
-  return presets.map((label) => {
-    const existing = state.nodes.find((n) => n.normalizedLabel === normalize(label));
-    return { id: existing?.id || null, label, count: existing ? counts.get(existing.id) || 0 : 0 };
+  return BODY_REACTION_PRESETS.map((label) => {
+    return { id: null, label, count: counts.get(label) || 0 };
   });
 }
 
@@ -3313,7 +3469,7 @@ function openEditNodeDialog(nodeId) {
 
 function newNodeTitle(context) {
   if (context === "trigger") return recordingSource === "external" ? "新的外部触发" : "新的内部触发";
-  if (context === "body") return "写下身体感觉";
+  if (context === "body") return "写下身体反应";
   if (context === "path-new") return "新的路径";
   if (context === "path-old") return "旧的一步";
   if (isRecordingActive()) return "添加这次发生的一步";
@@ -3322,7 +3478,7 @@ function newNodeTitle(context) {
 
 function newNodePlaceholder(context) {
   if (context === "trigger") return recordingSource === "external" ? "例如：导师发消息、工作被打断" : "例如：想到明天汇报、突然想到论文";
-  if (context === "body") return "例如：胸口紧、喉咙堵、胃里发紧";
+  if (context === "body") return "例如：手发麻、脸热、胸口有火";
   if (context === "path-new") return "例如：想逃开、喝水、打开消息";
   if (context === "path-old") return "例如：洗脸、刷手机、躺下";
   if (isRecordingActive()) return "例如：想逃开、刷手机、打开消息";
@@ -3360,6 +3516,16 @@ function addNewNodeFromDialog() {
     render();
     return;
   }
+  if (newNodeContext === "body") {
+    if (!recordingBodyReactions.includes(label)) recordingBodyReactions.push(label);
+    recordingBodyPromptDone = false;
+    recordingBodySkipped = false;
+    syncGuidedAutosave();
+    els.dialog.close();
+    renderRecorder();
+    render();
+    return;
+  }
   let existing = state.nodes.find((n) => n.normalizedLabel === normalize(label));
   if (!existing) {
     existing = node(uid(), label);
@@ -3370,15 +3536,15 @@ function addNewNodeFromDialog() {
   if (shouldCreateIntendedPath(newNodeContext)) addPlannedEdgeFromCurrent(existing.id);
   if (isRecordingActive()) {
     markFreshRecordingStep(existing.id);
-    recording.push(existing.id);
+    if (newNodeContext === "body" && recording.includes(existing.id)) {
+      // keep one body reaction node per recording draft
+    } else {
+      recording.push(existing.id);
+    }
     if (recording.length === 1) {
       selectedNodeId = existing.id;
       pathStartId = existing.id;
     }
-  }
-  if (newNodeContext === "body") {
-    recordingBodyPromptDone = true;
-    recordingBodySkipped = false;
   }
   syncGuidedAutosave();
   els.dialog.close();
@@ -3418,7 +3584,7 @@ function hasObservedEdge(fromNodeId, toNodeId) {
 }
 
 function renderNodeMatches() {
-  if (newNodeContext === "edit-node") {
+  if (newNodeContext === "edit-node" || newNodeContext === "body") {
     els.nodeMatches.innerHTML = "";
     return;
   }
@@ -3439,14 +3605,18 @@ function renderNodeMatches() {
       if (shouldCreateIntendedPath(newNodeContext)) addPlannedEdgeFromCurrent(button.dataset.useNode);
       if (isRecordingActive()) {
         markFreshRecordingStep(button.dataset.useNode);
-        recording.push(button.dataset.useNode);
+        if (newNodeContext === "body" && recording.includes(button.dataset.useNode)) {
+          // keep one body reaction node per recording draft
+        } else {
+          recording.push(button.dataset.useNode);
+        }
         if (recording.length === 1) {
           selectedNodeId = button.dataset.useNode;
           pathStartId = button.dataset.useNode;
         }
       }
       if (newNodeContext === "body") {
-        recordingBodyPromptDone = true;
+        recordingBodyPromptDone = false;
         recordingBodySkipped = false;
       }
       els.dialog.close();

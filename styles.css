@@ -1085,6 +1085,12 @@ h2 {
   color: #20345d;
 }
 
+.choice-card-main.selected-body-step {
+  background: rgba(53, 199, 89, 0.1);
+  box-shadow: 0 0 0 1px rgba(53, 199, 89, 0.34) inset;
+  color: #145c27;
+}
+
 .record-panel[data-surface="path-picker"] .choice-card span {
   margin-top: 3px;
 }
@@ -1155,6 +1161,17 @@ h2 {
   color: #4a7c58;
 }
 
+.body-continue-card {
+  border-color: rgba(37, 99, 235, 0.28);
+  background: #f4f7ff;
+  color: #1d3f8f;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.08) inset;
+}
+
+.body-continue-card span {
+  color: #4f6596;
+}
+
 .old-choice-card {
   border-color: rgba(99, 109, 124, 0.18);
   background: rgba(255, 255, 255, 0.82);
@@ -1183,6 +1200,39 @@ h2 {
   color: var(--muted);
   font-size: 13px;
   margin-top: 5px;
+}
+
+.body-selected-summary {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(53, 199, 89, 0.28);
+  border-radius: 16px;
+  background: #f5fcf6;
+}
+
+.body-selected-summary > span {
+  color: #4a7c58;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 30px;
+}
+
+.body-selected-summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.body-selected-summary button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-color: rgba(53, 199, 89, 0.32);
+  background: #ffffff;
+  color: #145c27;
+  box-shadow: none;
 }
 
 .record-actions {
